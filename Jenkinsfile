@@ -14,6 +14,18 @@ def runCompose(String args) {
     }
 }
 
+def cleanupContainers() {
+    if (isUnix()) {
+        sh '''
+        docker rm -f ngd-neo4j ngd-cassandra ngd-app 2>/dev/null || true
+        '''
+    } else {
+        bat '''
+        docker rm -f ngd-neo4j ngd-cassandra ngd-app >nul 2>&1
+        '''
+    }
+}
+
 pipeline {
     agent any
 
@@ -50,7 +62,7 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    // 🔥 IMPORTANT FIX: Skip entrypoint to avoid DB wait
+                    // 🔥 skip entrypoint → prevents DB wait
                     runCompose('run --rm --no-deps --entrypoint "" app python -m pytest tests/ -v')
                 }
             }
@@ -64,15 +76,17 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
+                    cleanupContainers()
+
                     if (isUnix()) {
                         sh '''
-                        docker compose down || docker-compose down
+                        docker compose down --remove-orphans || docker-compose down --remove-orphans
                         docker compose up -d || docker-compose up -d
                         sleep 40
                         '''
                     } else {
                         bat '''
-                        docker compose down || docker-compose down
+                        docker compose down --remove-orphans || docker-compose down --remove-orphans
                         docker compose up -d || docker-compose up -d
                         timeout /t 40
                         '''
@@ -86,12 +100,18 @@ pipeline {
                 script {
                     if (isUnix()) {
                         sh '''
+                        echo "Running containers:"
                         docker ps
+
+                        echo "Compose status:"
                         docker compose ps || docker-compose ps
                         '''
                     } else {
                         bat '''
+                        echo Running containers:
                         docker ps
+
+                        echo Compose status:
                         docker compose ps || docker-compose ps
                         '''
                     }
@@ -102,17 +122,17 @@ pipeline {
 
     post {
         success {
-            echo 'PIPELINE SUCCESS'
+            echo 'PIPELINE SUCCESS ✅'
             echo 'App: http://localhost:8501'
         }
         failure {
-            echo 'PIPELINE FAILED - check logs above'
+            echo 'PIPELINE FAILED ❌ - check logs above'
             script {
                 runCompose('logs --no-color')
             }
         }
         always {
-            echo 'Pipeline finished'
+            echo 'Pipeline finished.'
         }
     }
 }
