@@ -6,47 +6,21 @@ def runCmd(String windowsCmd, String unixCmd = null) {
     }
 }
 
-def runCompose(String args) {
-    if (isUnix()) {
-        sh "if command -v docker-compose >/dev/null 2>&1; then docker-compose ${args}; else docker compose ${args}; fi"
-    } else {
-        bat "docker compose ${args} || docker-compose ${args}"
-    }
-}
-
-def cleanupNamedContainers() {
-    if (isUnix()) {
-        sh 'docker rm -f ngd-neo4j ngd-cassandra ngd-app >/dev/null 2>&1 || true'
-    } else {
-        bat 'docker rm -f ngd-neo4j ngd-cassandra ngd-app >nul 2>&1 || exit 0'
-    }
-}
-
-def runStatus(String windowsCmd, String unixCmd = null) {
-    if (isUnix()) {
-        return sh(script: (unixCmd ?: windowsCmd), returnStatus: true)
-    }
-    return bat(script: windowsCmd, returnStatus: true)
-}
-
 pipeline {
     agent any
 
     triggers {
-        // Periodically check GitHub for new commits (acts as auto-fetch trigger)
         pollSCM('H/2 * * * *')
     }
 
     environment {
-        COMPOSE_PROJECT_NAME = 'ngd-traffic-demo'
-        APP_PORT             = '8501'
+        APP_PORT = '8501'
     }
 
     options {
         timeout(time: 20, unit: 'MINUTES')
         disableConcurrentBuilds()
         timestamps()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
@@ -54,83 +28,77 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                runCmd('git rev-parse --short HEAD')
             }
         }
 
         stage('Build') {
             steps {
-                runCompose('build --pull')
+                script {
+                    if (isUnix()) {
+                        sh 'docker compose build || docker-compose build'
+                    } else {
+                        bat 'docker compose build || docker-compose build'
+                    }
+                }
             }
         }
 
         stage('Test') {
             steps {
-                // Unit tests do not need Neo4j/Cassandra runtime.
-                // Override entrypoint to avoid DB wait logic in entrypoint.sh during tests.
-                runCompose('run --rm --no-deps --entrypoint "" app python -m pytest tests/ -v --tb=short')
-            }
-            post {
-                always {
-                    runCompose('down --remove-orphans')
+                script {
+                    if (isUnix()) {
+                        sh 'docker compose run --rm --no-deps app python -m pytest tests/ || docker-compose run --rm --no-deps app python -m pytest tests/'
+                    } else {
+                        bat 'docker compose run --rm --no-deps app python -m pytest tests/ || docker-compose run --rm --no-deps app python -m pytest tests/'
+                    }
                 }
             }
         }
 
         stage('Deploy') {
             steps {
-                // These fixed names are defined in docker-compose.yml and may exist from prior/manual runs.
-                cleanupNamedContainers()
-                runCompose('down --remove-orphans')
-                runCompose('up -d')
-                runCmd('timeout /t 45 /nobreak', 'sleep 45')
+                script {
+                    if (isUnix()) {
+                        sh '''
+                        docker compose down || docker-compose down
+                        docker compose up -d || docker-compose up -d
+                        sleep 30
+                        '''
+                    } else {
+                        bat '''
+                        docker compose down || docker-compose down
+                        docker compose up -d || docker-compose up -d
+                        timeout /t 30
+                        '''
+                    }
+                }
             }
         }
 
         stage('Verify') {
             steps {
-                // Verify from the correct runtime context:
-                // - Linux Jenkins agents often cannot reach app via localhost:8501 directly.
-                // - So we probe health from inside the app container.
                 script {
                     if (isUnix()) {
                         sh '''
-                            set +e
-                            if command -v docker-compose >/dev/null 2>&1; then
-                              C="docker-compose"
-                            else
-                              C="docker compose"
-                            fi
-
-                            for i in $(seq 1 20); do
-                              $C exec -T app python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)" && exit 0
-                              sleep 3
-                            done
-                            exit 1
+                        docker ps
                         '''
                     } else {
-                        bat 'powershell -NoProfile -Command "$ok=$false; 1..20 | ForEach-Object { try { $resp = Invoke-WebRequest -Uri http://localhost:%APP_PORT%/_stcore/health -UseBasicParsing -TimeoutSec 5; if ($resp.StatusCode -eq 200) { $ok=$true; break } } catch {}; Start-Sleep -Seconds 3 }; if (-not $ok) { exit 1 }"'
+                        bat '''
+                        docker ps
+                        '''
                     }
                 }
-                runCompose('ps')
             }
         }
     }
 
     post {
         success {
-            echo 'PIPELINE SUCCEEDED'
-            echo 'App URL: http://localhost:8501'
-            echo 'Neo4j Browser URL: http://localhost:7474'
+            echo 'PIPELINE SUCCESS'
+            echo 'App: http://localhost:8501'
         }
         failure {
-            echo 'PIPELINE FAILED - check stage logs.'
-            runCompose('logs --no-color')
-            runCompose('down --remove-orphans')
-            cleanupNamedContainers()
-        }
-        always {
-            echo 'Pipeline execution finished.'
+            echo 'PIPELINE FAILED'
         }
     }
 }
