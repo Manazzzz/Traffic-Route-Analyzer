@@ -6,6 +6,14 @@ def runCmd(String windowsCmd, String unixCmd = null) {
     }
 }
 
+def runCompose(String args) {
+    if (isUnix()) {
+        sh "docker compose ${args} || docker-compose ${args}"
+    } else {
+        bat "docker compose ${args} || docker-compose ${args}"
+    }
+}
+
 pipeline {
     agent any
 
@@ -34,11 +42,7 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    if (isUnix()) {
-                        sh 'docker compose build || docker-compose build'
-                    } else {
-                        bat 'docker compose build || docker-compose build'
-                    }
+                    runCompose('build --pull')
                 }
             }
         }
@@ -46,11 +50,13 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    if (isUnix()) {
-                        sh 'docker compose run --rm --no-deps app python -m pytest tests/ || docker-compose run --rm --no-deps app python -m pytest tests/'
-                    } else {
-                        bat 'docker compose run --rm --no-deps app python -m pytest tests/ || docker-compose run --rm --no-deps app python -m pytest tests/'
-                    }
+                    // 🔥 IMPORTANT FIX: Skip entrypoint to avoid DB wait
+                    runCompose('run --rm --no-deps --entrypoint "" app python -m pytest tests/ -v')
+                }
+            }
+            post {
+                always {
+                    runCompose('down --remove-orphans')
                 }
             }
         }
@@ -62,13 +68,13 @@ pipeline {
                         sh '''
                         docker compose down || docker-compose down
                         docker compose up -d || docker-compose up -d
-                        sleep 30
+                        sleep 40
                         '''
                     } else {
                         bat '''
                         docker compose down || docker-compose down
                         docker compose up -d || docker-compose up -d
-                        timeout /t 30
+                        timeout /t 40
                         '''
                     }
                 }
@@ -81,10 +87,12 @@ pipeline {
                     if (isUnix()) {
                         sh '''
                         docker ps
+                        docker compose ps || docker-compose ps
                         '''
                     } else {
                         bat '''
                         docker ps
+                        docker compose ps || docker-compose ps
                         '''
                     }
                 }
@@ -98,7 +106,13 @@ pipeline {
             echo 'App: http://localhost:8501'
         }
         failure {
-            echo 'PIPELINE FAILED'
+            echo 'PIPELINE FAILED - check logs above'
+            script {
+                runCompose('logs --no-color')
+            }
+        }
+        always {
+            echo 'Pipeline finished'
         }
     }
 }
