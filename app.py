@@ -39,7 +39,7 @@ else:
     _LOGO_B64 = None
 
 st.set_page_config(
-    page_title="NGD Traffic Route Analyzer",
+    page_title="Traffic Path Analyzer",
     page_icon=_LOGO_PATH if os.path.exists(_LOGO_PATH) else "🛣️",
     layout="wide",
     initial_sidebar_state="expanded",
