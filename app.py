@@ -596,12 +596,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    find_route = st.button("🚀 Find Best Route", use_container_width=True, type="primary")
+    find_route = st.button("Best Route", use_container_width=True, type="primary")
 
 
 # ═══════════════════════════════════════════════
 # ROUTE COMPUTATION
-# ═══════════════════════════════════════════════
+# ══════════════════════════════════════════════
 if find_route:
     with st.spinner("Computing optimal route..."):
         start_time = time.time()
